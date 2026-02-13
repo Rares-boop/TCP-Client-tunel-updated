@@ -90,6 +90,8 @@ public class TcpConnection {
 //        out.flush();
 //        in = new ObjectInputStream(socket.getInputStream());
 
+        socket.setTcpNoDelay(true);
+
         out = new PrintWriter(socket.getOutputStream(), true);
         in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
@@ -102,47 +104,101 @@ public class TcpConnection {
     private static PrintWriter out;
     private static BufferedReader in;
 
-    private static boolean performHandshake() {
-        try {
-            Log.d("TCP", "Start Handshake...");
-
-//            String jsonHello = (String) in.readObject();
-
-            String jsonHello = in.readLine();
-            if(jsonHello==null){
-                return false;
-            }
-
-            NetworkPacket helloPacket = NetworkPacket.fromJson(jsonHello);
-
-            if (helloPacket.getType() == PacketType.KYBER_SERVER_HELLO) {
-                String serverPubBase64 = helloPacket.getPayload().getAsString();
-                byte[] serverPubBytes = Base64.decode(serverPubBase64, Base64.NO_WRAP);
-
-                PublicKey serverKyberPub = CryptoHelper.decodeKyberPublicKey(serverPubBytes);
-                CryptoHelper.KEMResult result = CryptoHelper.encapsulate(serverKyberPub);
-
-                sessionKey = result.aesKey;
-
-                byte[] wrappedBytes = result.wrappedKey;
-                String wrappedBase64 = Base64.encodeToString(wrappedBytes, Base64.NO_WRAP);
-                NetworkPacket finishPacket = new NetworkPacket(PacketType.KYBER_CLIENT_FINISH, 0, wrappedBase64);
-
-//                out.writeObject(finishPacket.toJson());
+//    private static boolean performHandshake() {
+//        try {
+//            Log.d("TCP", "Start Handshake...");
+//
+////            String jsonHello = (String) in.readObject();
+//
+//            String jsonHello = in.readLine();
+//            if(jsonHello==null){
+//                return false;
+//            }
+//
+//            NetworkPacket helloPacket = NetworkPacket.fromJson(jsonHello);
+//
+//            if (helloPacket.getType() == PacketType.KYBER_SERVER_HELLO) {
+//                String serverPubBase64 = helloPacket.getPayload().getAsString();
+//                byte[] serverPubBytes = Base64.decode(serverPubBase64, Base64.NO_WRAP);
+//
+//                PublicKey serverKyberPub = CryptoHelper.decodeKyberPublicKey(serverPubBytes);
+//                CryptoHelper.KEMResult result = CryptoHelper.encapsulate(serverKyberPub);
+//
+//                sessionKey = result.aesKey;
+//
+//                byte[] wrappedBytes = result.wrappedKey;
+//                String wrappedBase64 = Base64.encodeToString(wrappedBytes, Base64.NO_WRAP);
+//                NetworkPacket finishPacket = new NetworkPacket(PacketType.KYBER_CLIENT_FINISH, 0, wrappedBase64);
+//
+////                out.writeObject(finishPacket.toJson());
+////                out.flush();
+//
+//                out.println(finishPacket.toJson());
 //                out.flush();
+//
+//                Log.d("TCP", "Handshake OK! Tunel AES activ.");
+//                return true;
+//            }
+//            return false;
+//        } catch (Exception e) {
+//            e.printStackTrace();
+//            return false;
+//        }
+//    }
 
+private static boolean performHandshake() {
+    try {
+        // ⏱️ START CRONOMETRU
+        long tStart = System.currentTimeMillis();
+        Log.d("TIMER_KYBER", "--- START HANDSHAKE ---");
+
+        // 1. Asteptam Hello de la Server
+        String jsonHello = in.readLine();
+        if (jsonHello == null) return false;
+
+        // ⏱️ Checkpoint 1: Cat a durat sa vina pachetul
+        long tRecvHello = System.currentTimeMillis();
+        Log.d("TIMER_KYBER", "1. Primit Server Hello in: " + (tRecvHello - tStart) + "ms");
+
+        NetworkPacket helloPacket = NetworkPacket.fromJson(jsonHello);
+
+        if (helloPacket.getType() == PacketType.KYBER_SERVER_HELLO) {
+            String serverPubBase64 = helloPacket.getPayload().getAsString();
+            byte[] serverPubBytes = Base64.decode(serverPubBase64, Base64.NO_WRAP);
+
+            // --- MATEMATICA KYBER ---
+            PublicKey serverKyberPub = CryptoHelper.decodeKyberPublicKey(serverPubBytes);
+            CryptoHelper.KEMResult result = CryptoHelper.encapsulate(serverKyberPub);
+
+            sessionKey = result.aesKey;
+
+            // ⏱️ Checkpoint 2: Cat a durat matematica (Encapsulate)
+            long tMath = System.currentTimeMillis();
+            Log.d("TIMER_KYBER", "2. Kyber Encapsulate (Matematica) a durat: " + (tMath - tRecvHello) + "ms");
+
+            byte[] wrappedBytes = result.wrappedKey;
+            String wrappedBase64 = Base64.encodeToString(wrappedBytes, Base64.NO_WRAP);
+            NetworkPacket finishPacket = new NetworkPacket(PacketType.KYBER_CLIENT_FINISH, 0, wrappedBase64);
+
+            // Trimitem raspunsul
+            synchronized (out) {
                 out.println(finishPacket.toJson());
                 out.flush();
-
-                Log.d("TCP", "Handshake OK! Tunel AES activ.");
-                return true;
             }
-            return false;
-        } catch (Exception e) {
-            e.printStackTrace();
-            return false;
+
+            // ⏱️ FINAL
+            long tEnd = System.currentTimeMillis();
+            Log.d("TIMER_KYBER", "3. Trimis raspuns. GATA.");
+            Log.d("TIMER_KYBER", "🔥 TIMP TOTAL HANDSHAKE: " + (tEnd - tStart) + "ms 🔥");
+
+            return true;
         }
+        return false;
+    } catch (Exception e) {
+        e.printStackTrace();
+        return false;
     }
+}
 
     private static boolean isExemptFromTunnel(PacketType type) {
         return type == PacketType.SEND_MESSAGE ||
